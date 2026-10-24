@@ -22,6 +22,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const vm = require('node:vm');
 
 const PKG_DIR = '@deepseek-ai';
 const PACKAGES = ['dsh-client-ui-chat', 'dsh-client-ui-conversation'];
@@ -73,8 +74,23 @@ function candidates() {
     if (dir && isUsable(dir)) found.push({ dir, source });
   };
 
-  // 1) 显式指定
-  if (dirArg) push(dirArg, '--dir / DSH_NODE_MODULES');
+  // Explicit paths must never fall through to a different installation.
+  if (dirArg) {
+    push(dirArg, '--dir / DSH_NODE_MODULES');
+    return found;
+  }
+
+  // Desktop launchers support custom drives and install names, without executing them.
+  if (process.platform === 'win32') {
+    for (const entry of (process.env.PATH || '').split(path.delimiter)) {
+      const launcher = path.join(entry.replace(/^"|"$/g, ''), 'dsh.cmd');
+      try {
+        const text = fs.readFileSync(launcher, 'utf8');
+        const match = /"([^"\r\n]+[\\/]resources[\\/]app[\\/]lib[\\/]desktop-cli\.js)"/i.exec(text);
+        if (match) push(path.dirname(path.dirname(match[1])), 'PATH dsh.cmd');
+      } catch {}
+    }
+  }
 
   // 2) DSH_HOME
   if (process.env.DSH_HOME) {
@@ -93,7 +109,8 @@ function candidates() {
     const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
     const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
     for (const root of [localAppData, path.join(localAppData, 'Programs'), programFiles, programFilesX86]) {
-      for (const name of ['DeepSeek Harness', 'deepseek-harness', 'DSH', 'dsh']) {
+      for (const name of ['DSH Desktop', 'DeepSeek Harness', 'deepseek-harness', 'DSH', 'dsh']) {
+        push(path.join(root, name, 'resources', 'app'), path.join(root, name));
         push(path.join(root, name, 'resources', 'dsh'), path.join(root, name));
       }
     }
@@ -256,9 +273,22 @@ function patchChat(source) {
  children:(0,react_jsx_runtime.jsx)("svg",{viewBox:"0 0 24 24",fill:"none",stroke:"currentColor",strokeWidth:1.7,"aria-hidden":true,children:(0,react_jsx_runtime.jsx)("path",{d:"M9 4 3 10l6 6M3 10h11a7 7 0 0 1 0 14"})})})}),
 \t\t\t\t\textraActions,`);
 
-  s = sub(s,
-    'function UserMessageNodeView({ node, renderFactorySlot, loadImage, t }) {',
-    'function UserMessageNodeView({ node, renderFactorySlot, loadImage, t, sessionId, inputActions, retractMessage, useAccess }) {\n const [retracting,setRetracting]=(0,react.useState)(false);\n const allowed=useAccess("commands/execute");\n const onRetract=async()=>{if(retracting)return;setRetracting(true);try {const result=await retractMessage(sessionId,node.data.seq);inputActions.setDraft(result.text);inputActions.persistDraft();}catch(e){window.alert(t("message.retractFailed")+": "+e.message)}finally{setRetracting(false)}};');
+  const modern = s.includes('function UserMessageNodeView({ node, renderMessageImages, openFile, openSkill, t }) {');
+  const viewAnchor = modern
+    ? 'function UserMessageNodeView({ node, renderMessageImages, openFile, openSkill, t }) {'
+    : 'function UserMessageNodeView({ node, renderFactorySlot, loadImage, t }) {';
+  s = sub(s, viewAnchor, viewAnchor.replace('t }) {', 't, sessionId, inputActions, retractMessage, useAccess }) {') + `
+ const [retracting,setRetracting]=(0,react.useState)(false);
+ const retractPending=(0,react.useRef)(false);
+ ${modern ? 'const allowed=typeof retractMessage==="function";' : 'const allowed=useAccess("commands/execute");'}
+ const onRetract=async()=>{
+   if(retractPending.current)return;
+   if(!inputActions || typeof inputActions.setDraft!=="function") {window.alert(t("message.retractFailed")+": draft API unavailable");return;}
+   retractPending.current=true;setRetracting(true);
+   try {const result=await retractMessage(sessionId,node.data.seq);inputActions.setDraft(result.text);await inputActions.persistDraft?.();}
+   catch(e){window.alert(t("message.retractFailed")+": "+e.message)}
+   finally{retractPending.current=false;setRetracting(false)}
+ };`);
 
   s = sub(s,
     'time: data.time,\n\t\t\t\t\tclock: "start",',
@@ -313,7 +343,13 @@ function applyAll(base, jobs) {
       continue;
     }
     try {
-      planned.push({ ...job, current, patched: job.transform(current) });
+      const patched = job.transform(current);
+      new vm.Script(patched, { filename: file });
+      const saved = backupPath(job.pkg);
+      if (fs.existsSync(saved) && fs.readFileSync(saved, 'utf8') !== current) {
+        throw new Error('已有备份与当前产物不同；请保留旧备份并使用独立备份目录，避免覆盖升级后的文件');
+      }
+      planned.push({ ...job, current, patched });
     } catch (error) {
       broken.push({ pkg: job.pkg, reason: error.message });
     }
@@ -364,8 +400,13 @@ function main() {
     log('');
   }
 
-  for (const pkg of PACKAGES) restore(base, pkg, { force: restoreOnly });
-  if (restoreOnly) return;
+  if (restoreOnly) {
+    for (const pkg of PACKAGES) {
+      if (dryRun) log('[dry-run] 将还原（不写入）: ' + pkg);
+      else restore(base, pkg, { force: true });
+    }
+    return;
+  }
 
   applyAll(base, [
     { pkg: 'dsh-client-ui-chat', transform: patchChat },
@@ -380,8 +421,11 @@ function main() {
   log('完成：重启 DSH Desktop，或在 Web 页面按 Ctrl+Shift+R 强刷后生效。');
 }
 
-try {
-  main();
-} catch (error) {
-  fail(error instanceof Error ? error.message : String(error));
+module.exports = { patchChat, patchConversation, normalizePackagesDir };
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
 }
