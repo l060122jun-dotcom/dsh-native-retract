@@ -76,6 +76,18 @@ node scripts/patch-native.cjs
 # Linux: 默认 /opt/DeepSeek Harness/resources/dsh
 ```
 
+Linux 探测顺序：`--dir` → PATH 上的 `/usr/bin/dsh`、`/usr/bin/dsh-desktop` 等 launcher（只读解析，不执行）→
+`~/.local/share/applications/*.desktop` 的 `Exec=`/`--app-path=` → `DSH_HOME` →
+`/opt`、`/usr/lib`、`/usr/local/lib`、`/usr/share` 下 `DeepSeek Harness`、`DSH Desktop`、`deepseek-harness`、`DSH`、`dsh`
+→ `~/.local/share`、`~/Applications`、`~/snap/<name>/current` → `~/.dsh`。
+
+只读安装（Flatpak 沙箱、root 拥有的 `/opt`）需先解压或复制到可写位置，再用 `--dir` 指向副本。
+
+```bash
+# Linux 适配回归（临时副本，不动真实安装）
+DSH_ROOT="/opt/DeepSeek Harness/resources/dsh" node scripts/test-linux.cjs
+```
+
 ### 还原
 
 ```bash

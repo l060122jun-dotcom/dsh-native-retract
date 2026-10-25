@@ -9,9 +9,20 @@ const root = process.env.DSH_ROOT;
 if (!root) throw new Error('Set DSH_ROOT to the Desktop resources/app directory');
 const packages = ['dsh-client-ui-chat', 'dsh-client-ui-conversation'];
 const originals = packages.map(p => fs.readFileSync(path.join(root,'node_modules','@deepseek-ai',p,'lib','client.js'),'utf8'));
-const patched = [patchChat(originals[0]), patchConversation(originals[1])];
+for (const source of originals) new vm.Script(source);
+// 已打过补丁的安装：优先从仓库备份取未修改产物，保证测试始终针对原始结构
+const pristine = path.join(__dirname,'..','backups');
+const sources = packages.map((p,i) => {
+  const saved = path.join(pristine, p + '.client.js');
+  return fs.existsSync(saved) ? fs.readFileSync(saved,'utf8') : originals[i];
+});
+const patched = [patchChat(sources[0]), patchConversation(sources[1])];
 for (const source of patched) new vm.Script(source);
-assert(patched[0].includes('renderMessageImages, openFile, openSkill, t, sessionId'));
+assert(patched[1].includes('stageRestoredAttachments'));
+assert(patched[1].includes('native-retract/attachments-restored'));
+assert(patched[1].includes('receiptId: attachment.restored'));
+assert(patched[1].includes('attachment.restored !== void 0 && this.fileUploads.getSnapshot()[attachment.id]?.status === "ready"'));
+assert(patched[0].includes('stageRestoredAttachments?.(sessionId,result.attachments)'));
 assert(!patched[0].includes('const allowed=useAccess("commands/execute");'));
 assert(patched[0].includes('await inputActions.persistDraft?.()'));
 assert(patched[0].includes('retractPending.current=true'));

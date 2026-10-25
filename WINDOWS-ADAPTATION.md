@@ -14,6 +14,16 @@
 - 修复 --dry-run 隐式还原问题，包括 --restore --dry-run 也只读。
 - 测试动态 import 使用 file URL，兼容 Windows 盘符。
 
+## 附件撤回
+
+撤回带附件的用户消息时，图片与文件引用一并返回输入框：
+
+- Host 侧 `index.js` 从被撤回消息的 `content` 中提取 `image`/`file` 块，随结果返回 `attachments`（仅持久引用 `attachmentId`，不重传字节）。
+- 客户端把引用包成运行时草稿：图片用 `uiConversation.imageUrl` 生成预览，文件直接复用已落盘引用，跳过重新上传空字节。
+- 内存合并发生在同一轮：命令结果 → 草稿 → 附件入列，不做聊天分叉，原始日志不改写。
+
+已知边界：分片上传的文件只有已落盘引用可恢复；撤回不会删除附件存储中的原对象。
+
 ## 验证
 
 ```powershell

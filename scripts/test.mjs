@@ -23,4 +23,19 @@ if (!code.includes('function nativeRetractVisible(')) code = patchConversation(c
 const source=code.slice(code.indexOf('function nativeRetractVisible('),code.indexOf('var ConversationNodeAssembler = class'));
 const visible=new Function(source+';return nativeRetractVisible')( )(s.snapshotEvents().map(event=>({event})));
 assert(visible.some(r=>r.event.seq===first.seq));assert(!visible.some(r=>r.event.seq===second.seq));assert(visible.some(r=>r.event.seq===after.seq));
-console.log('PASS: exact boundary, retained prefix/log, draft, model history, duplicate protection, new branch, UI replay filter');
+
+// 附件撤回：图片与文件引用原样回传，未被误判为文本
+const image={type:'image',attachment:{attachmentId:'sha256:'+'a'.repeat(64),mediaType:'image/png',variant:'display'}};
+const file={type:'file',attachment:{attachmentId:'sha256:'+'b'.repeat(64),name:'报告.pdf',bytes:2048}};
+const withFiles=Session.create('session-native-retract-files');
+withFiles.append('turn/start',{turn:1});
+const attached=withFiles.append('user/message',{id:'m-files',role:'user',source:{kind:'user'},content:[{type:'text',text:'看下这两个文件'},image,file]},{surfaceOp:'append'});
+withFiles.append('turn/end',{turn:1,reason:{kind:'completed'}});
+const attachmentsHandler={session:withFiles,cancel(){},async whenIdle(){},async runMaintenance(fn){return fn()}};
+const kept=await retract({sessions:{async flush(){}}},attachmentsHandler,attached.seq);
+assert.equal(kept.text,'看下这两个文件');
+assert.deepEqual(kept.attachments,[
+  {kind:'image',attachmentId:image.attachment.attachmentId},
+  {kind:'file',attachmentId:file.attachment.attachmentId,name:'报告.pdf',bytes:2048}
+]);
+console.log('PASS: exact boundary, retained prefix/log, draft, model history, duplicate protection, new branch, UI replay filter, attachment refs restored');
