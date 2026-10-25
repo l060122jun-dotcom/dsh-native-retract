@@ -26,7 +26,8 @@ const sources = packages.map((p) => {
 // 补丁本身必须语法合法，且包含附件恢复与撤回重放过滤
 const patched = [patchChat(sources[0]), patchConversation(sources[1])];
 for (const source of patched) new vm.Script(source);
-assert(patched[0].includes('stageRestoredAttachments?.(sessionId,result.attachments)'));
+assert(patched[0].includes('ui.stageRestoredAttachments(sessionId,list)'));
+assert(!/const onRetract=[\s\S]*?ctx\.get\("uiConversation"\)/.test(patched[0].slice(patched[0].indexOf('const onRetract=async()=>'), patched[0].indexOf('const onRetract=async()=>') + 1200)));
 assert(patched[0].includes('sessionId, inputActions, retractMessage'));
 assert(patched[1].includes('stageRestoredAttachments'));
 assert(patched[1].includes('native-retract/attachments-restored'));

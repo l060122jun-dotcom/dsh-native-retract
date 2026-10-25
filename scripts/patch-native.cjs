@@ -341,10 +341,7 @@ function patchChat(source) {
      const result=await retractMessage(sessionId,node.data.seq);
      inputActions.setDraft(result.text);
      await inputActions.persistDraft?.();
-     if(Array.isArray(result.attachments)&&result.attachments.length>0){
-       const staged=ctx.get("uiConversation")?.stageRestoredAttachments?.(sessionId,result.attachments)??[];
-       if(staged.length<result.attachments.length) window.alert(t("message.retractPartial")+" ("+staged.length+"/"+result.attachments.length+")");
-     }
+     if(result.attachmentsFailed>0) window.alert(t("message.retractPartial")+" ("+result.attachmentsFailed+")");
    }
    catch(e){window.alert(t("message.retractFailed")+": "+e.message)}
    finally{retractPending.current=false;setRetracting(false)}
@@ -356,7 +353,7 @@ function patchChat(source) {
 
   s = sub(s,
     'key: "user",\n\t\t\t\tlocale: NS',
-    'key: "user",\n inject:()=>({retractMessage:async(sessionId,seq)=>{const r=await ctx.remote.commands.execute(sessionId,"/native-retract "+seq,[]);if(!r.ok)throw new Error(r.error.message);const result=r.value?.result;if(result?.kind!=="success")throw new Error(result?.text??"撤回失败");return JSON.parse(result.text)}}),\n\t\t\t\tlocale: NS');
+    'key: "user",\n inject:()=>({retractMessage:async(sessionId,seq)=>{\n const r=await ctx.remote.commands.execute(sessionId,"/native-retract "+seq,[]);\n if(!r.ok)throw new Error(r.error.message);\n const result=r.value?.result;\n if(result?.kind!=="success")throw new Error(result?.text??"撤回失败");\n const parsed=JSON.parse(result.text);\n const list=Array.isArray(parsed.attachments)?parsed.attachments:[];\n const ui=ctx.get("uiConversation");\n const staged=list.length>0&&typeof ui?.stageRestoredAttachments==="function"?ui.stageRestoredAttachments(sessionId,list):[];\n return {...parsed,attachmentsFailed:list.length-staged.length};\n }}),\n\t\t\t\tlocale: NS');
 
   s = sub(s, 'const zh = {',
     'const zh = {\n "message.retract":"撤回", "message.retracting":"撤回中…", "message.retractFailed":"撤回失败", "message.retractPartial":"部分附件未能恢复到输入框",');
